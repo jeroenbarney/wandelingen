@@ -74,7 +74,7 @@
     function randomColor() {
         let color;
         do {
-            color = `#${(Math.random() * 0xFFFFFF | 0).toString(16)}`
+            color = `#${(Math.random() * 0xFFFFFF | 0).toString(16).padStart(6, '0')}`
         } while (colors_done.indexOf(color) !== -1);
         colors_done.push(color);
         return color;
