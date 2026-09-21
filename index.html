@@ -1,49 +1,135 @@
-<html>
+<!DOCTYPE html>
+<html lang="nl">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mijn Wandelingen</title>
+
+    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"/>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" defer></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/2.1.2/gpx.min.js" defer></script>
-    <style>
-        #map {
-            height: 100vh;
-            width: 100vw;
-        }
 
+    <style>
         body {
             margin: 0;
             padding: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #map {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .info-popup h3 {
+            margin: 0 0 5px 0;
+            color: #2c3e50;
+        }
+
+        .info-popup p {
+            margin: 3px 0;
+            font-size: 13px;
         }
     </style>
 </head>
 <body>
+
 <div id="map"></div>
-<!-- ... -->
+
 <script type="module">
-    (async () => {
-        const map = L.map('map');
-        L.tileLayer('http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: 'Map data &copy; <a href="http://www.osm.org">OpenStreetMap</a>'
-        }).addTo(map);
+    // 1. Initialiseer de kaart (standaard gecentreerd op Nederland)
+    const map = L.map('map').setView([52.1326, 5.2913], 8);
 
-        // URL to your GPX file or the GPX itself as a XML string.
-        const options = {
-            async: true,
-            polyline_options: {color: 'red'},
-        };
+    // 2. Voeg een mooie achtergrondkaart toe (OpenStreetMap)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors'
+    }).addTo(map);
 
-        const X = L.GPX;
-        X.prototype._load_xml = function (url, cb, options, async) {
-            fetch(url).then(r => r.blob())
-                .then(r => new Response(r.stream().pipeThrough(new DecompressionStream('gzip'))).text())
-                .then(r => {
-                    cb(new DOMParser().parseFromString(r, 'text/xml'), options)
-                })
+    // 4. Opties voor hoe de lijnen eruitzien op de kaart
+    const gpxOpties = {
+        async: true,
+        polyline_options: {
+            color: '#ff5722', // Mooie oranje/rode kleur voor de route
+            opacity: 0.75,
+            weight: 4,
+            lineCap: 'round'
+        },
+        marker_options: {
+            startIconUrl: null, // Verbergt de standaard start-marker (optioneel)
+            endIconUrl: null,   // Verbergt de standaard eind-marker (optioneel)
+            shadowUrl: null
         }
+    };
 
-        const gpx = new X('./all.gpx.gz', options).on('loaded', (e) => {
-            map.fitBounds(e.target.getBounds());
-        }).addTo(map);
-    })();
+    // Groep aanmaken om later alle wandelingen in één keer te kunnen bekijken
+    const alleWandelingenGroepeer = L.featureGroup().addTo(map);
+
+    L.GPX.prototype._load_xml = function (url, cb, options, async) {
+        cb(new DOMParser().parseFromString(url, 'text/xml'), options)
+    }
+
+    const colors_done = [];
+
+    function randomColor() {
+        let color;
+        do {
+            color = `#${(Math.random() * 0xFFFFFF | 0).toString(16)}`
+        } while (colors_done.indexOf(color) !== -1);
+        colors_done.push(color);
+        return color;
+    }
+
+    fetch('all.json.gz').then(r => r.blob())
+        .then(r => new Response(r.stream().pipeThrough(new DecompressionStream('gzip'))).text())
+        .then(r => Object.entries(JSON.parse(r)))
+        .then(r => r.map(item => ({bestand: item[0], gpx: item[1], color: randomColor()})))
+        .then(json => Promise.all(json.map(({bestand, gpx, color}) => new Promise((resolve, reject) => {
+                const options = JSON.parse(JSON.stringify(gpxOpties))
+                options.polyline_options.color = color;
+                const track = new L.GPX(gpx, options);
+
+                track.on('loaded', function ({target: gpxInstance}) {
+                    // Haal details op uit het GPX-bestand
+                    const naam = gpxInstance.get_name() || "Naamloze wandeling";
+                    // Afstand in kilometers (omgerekend van meters naar 1 decimaal)
+                    const afstand = (gpxInstance.get_distance() / 1000).toFixed(1);
+
+                    // Maak de inhoud voor de pop-up
+                    const popupInhoud = `
+                    <div class="info-popup">
+                        <h3>📍 ${naam}</h3>
+                        <p><strong>Afstand:</strong> ${afstand} km</p>
+                        <p><strong>Garmin:</strong> <a target="_blank" href="https://connect.garmin.com/app/activity/${bestand.replace(/\.gpx$/, '')}">${bestand.replace(/\.gpx$/, '')}</a></p>
+                        <p><strong>Datum:</strong> ${new Intl.DateTimeFormat('nl-NL').format(gpxInstance.get_start_time())}</p>
+                    </div>
+                `;
+
+                    // Koppel de pop-up aan de route
+                    gpxInstance.bindPopup(popupInhoud);
+
+                    // Voeg visuele feedback toe wanneer je met de muis over de route zweeft
+                    gpxInstance.on('mouseover', function () {
+                        this.setStyle({color: '#007bff', weight: 6}); // Wordt blauw en dikker
+                    });
+                    gpxInstance.on('mouseout', function () {
+                        this.setStyle({color: gpxOpties.polyline_options.color, weight: 4}); // Herstel origineel
+                    });
+
+                    // Voeg deze specifieke track toe aan de totale groep
+                    alleWandelingenGroepeer.addLayer(gpxInstance);
+                    resolve();
+                });
+
+                // Vang fouten op als een GPX-bestand bijvoorbeeld niet gevonden kan worden
+                track.on('error', function (e) {
+                    console.error("Kon bestand niet laden: " + bestand, e.err);
+                    reject();
+                });
+            })
+        )))
+        .then(() => map.fitBounds(alleWandelingenGroepeer.getBounds(), {padding: [30, 30]}));
+
 </script>
 </body>
 </html>
